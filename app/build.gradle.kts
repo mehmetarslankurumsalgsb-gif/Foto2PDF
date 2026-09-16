@@ -48,4 +48,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.3.4")
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
+
+    // Fotoğraf kırpma ekranı için
+    implementation("com.github.yalantis:ucrop:2.2.9")
 }
