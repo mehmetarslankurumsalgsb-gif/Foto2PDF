@@ -4,24 +4,26 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.Matrix
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
+import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -30,15 +32,7 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
-    companion object {
-        // Fotoğrafların en uzun kenarı bu değeri geçmeyecek şekilde küçültülür.
-        private const val MAX_IMAGE_DIMENSION = 1600
-        // JPEG sıkıştırma kalitesi (0-100). 75 iyi bir denge sağlar.
-        private const val JPEG_QUALITY = 75
-    }
-
     private val photoFiles = mutableListOf<File>()
-    private var pendingPhotoFile: File? = null
     private var lastPdfFile: File? = null
 
     private lateinit var statusText: TextView
@@ -48,19 +42,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var telegramButton: Button
     private lateinit var shareButton: Button
 
-    private val takePictureLauncher =
-        registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-            val file = pendingPhotoFile
-            pendingPhotoFile = null
-            if (success && file != null) {
-                compressFileInPlace(file)
-                photoFiles.add(file)
-                addThumbnail(file)
-                updateStatus()
-            } else {
-                file?.delete()
-                if (!success) {
-                    Toast.makeText(this, "Fotoğraf alınamadı.", Toast.LENGTH_SHORT).show()
+    private val captureActivityLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val paths = result.data?.getStringArrayListExtra(CaptureActivity.EXTRA_CAPTURED_PATHS)
+                if (!paths.isNullOrEmpty()) {
+                    paths.forEach { photoFiles.add(File(it)) }
+                    refreshThumbnails()
+                    updateStatus()
                 }
             }
         }
@@ -68,7 +57,7 @@ class MainActivity : AppCompatActivity() {
     private val requestCameraPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
-                launchCamera()
+                openCaptureActivity()
             } else {
                 Toast.makeText(this, "Kameraya izin vermeniz gerekiyor.", Toast.LENGTH_SHORT).show()
             }
@@ -81,6 +70,7 @@ class MainActivity : AppCompatActivity() {
                 for (uri in uris) {
                     if (importImageFromUri(uri)) addedCount++
                 }
+                refreshThumbnails()
                 updateStatus()
                 if (addedCount < uris.size) {
                     Toast.makeText(this, "Bazı fotoğraflar eklenemedi.", Toast.LENGTH_SHORT).show()
@@ -100,7 +90,7 @@ class MainActivity : AppCompatActivity() {
         shareButton = findViewById(R.id.shareButton)
 
         findViewById<Button>(R.id.takePhotoButton).setOnClickListener {
-            checkPermissionAndLaunchCamera()
+            checkPermissionAndOpenCapture()
         }
 
         findViewById<Button>(R.id.galleryButton).setOnClickListener {
@@ -110,7 +100,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         createPdfButton.setOnClickListener {
-            createPdf()
+            promptForPdfNameAndCreate()
         }
 
         whatsappButton.setOnClickListener { shareToPackage("com.whatsapp", "WhatsApp") }
@@ -120,36 +110,31 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.clearButton).setOnClickListener {
             photoFiles.forEach { it.delete() }
             photoFiles.clear()
-            thumbnailContainer.removeAllViews()
             lastPdfFile = null
+            refreshThumbnails()
             updatePdfButtons()
             updateStatus()
         }
 
         updatePdfButtons()
+        updateStatus()
     }
 
-    private fun checkPermissionAndLaunchCamera() {
+    // ---------- Fotoğraf çekme (uygulama içi, arka arkaya) ----------
+
+    private fun checkPermissionAndOpenCapture() {
         when {
             ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED -> launchCamera()
+                PackageManager.PERMISSION_GRANTED -> openCaptureActivity()
             else -> requestCameraPermission.launch(Manifest.permission.CAMERA)
         }
     }
 
-    private fun launchCamera() {
-        val photosDir = File(getExternalFilesDir(null), "photos").apply { mkdirs() }
-        val fileName = "PHOTO_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}.jpg"
-        val file = File(photosDir, fileName)
-        pendingPhotoFile = file
-
-        val uri: Uri = FileProvider.getUriForFile(
-            this,
-            "${packageName}.fileprovider",
-            file
-        )
-        takePictureLauncher.launch(uri)
+    private fun openCaptureActivity() {
+        captureActivityLauncher.launch(Intent(this, CaptureActivity::class.java))
     }
+
+    // ---------- Galeriden ekleme ----------
 
     /**
      * Galeriden seçilen bir görseli uygulamanın kendi klasörüne kopyalar,
@@ -165,110 +150,186 @@ class MainActivity : AppCompatActivity() {
                 FileOutputStream(destFile).use { output -> input.copyTo(output) }
             } ?: return false
 
-            compressFileInPlace(destFile)
+            ImageUtils.compressFileInPlace(destFile)
 
             if (!destFile.exists() || destFile.length() == 0L) {
                 return false
             }
 
             photoFiles.add(destFile)
-            addThumbnail(destFile)
             true
         } catch (e: Exception) {
             false
         }
     }
 
-    /**
-     * Verilen dosyadaki fotoğrafı okur, EXIF yönünü uygular, en uzun kenarı
-     * MAX_IMAGE_DIMENSION ile sınırlar ve JPEG olarak yeniden kaydederek
-     * dosya boyutunu küçültür. Bu sayede PDF çıktısı da küçük kalır.
-     */
-    private fun compressFileInPlace(file: File) {
-        try {
-            val bitmap = loadDownsampledBitmap(file, MAX_IMAGE_DIMENSION) ?: return
-            FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+    // ---------- Fotoğraf listesi / küçük resimler ----------
+
+    private fun refreshThumbnails() {
+        thumbnailContainer.removeAllViews()
+        for ((index, file) in photoFiles.withIndex()) {
+            thumbnailContainer.addView(buildThumbnailItem(index, file))
+        }
+    }
+
+    private fun buildThumbnailItem(index: Int, file: File): View {
+        val density = resources.displayMetrics.density
+        val itemWidth = (108 * density).toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(itemWidth, LinearLayout.LayoutParams.MATCH_PARENT).apply {
+                marginEnd = (8 * density).toInt()
             }
-            bitmap.recycle()
-        } catch (e: Exception) {
-            // Sıkıştırma başarısız olursa orijinal dosya olduğu gibi kalır.
-        }
-    }
-
-    /**
-     * Dosyayı bellek dostu bir şekilde (gerekiyorsa örnekleme yaparak) okur,
-     * EXIF dönüşünü uygular ve en uzun kenarı maxDim değerine indirir.
-     */
-    private fun loadDownsampledBitmap(file: File, maxDim: Int): Bitmap? {
-        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
-        val width = boundsOptions.outWidth
-        val height = boundsOptions.outHeight
-        if (width <= 0 || height <= 0) return null
-
-        var inSampleSize = 1
-        while (width / (inSampleSize * 2) >= maxDim && height / (inSampleSize * 2) >= maxDim) {
-            inSampleSize *= 2
+            gravity = Gravity.CENTER_HORIZONTAL
         }
 
-        val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
-        var bitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOptions) ?: return null
-
-        bitmap = rotateIfNeeded(bitmap, file) ?: bitmap
-
-        val largerSide = maxOf(bitmap.width, bitmap.height)
-        if (largerSide > maxDim) {
-            val ratio = maxDim.toFloat() / largerSide
-            val newWidth = (bitmap.width * ratio).toInt().coerceAtLeast(1)
-            val newHeight = (bitmap.height * ratio).toInt().coerceAtLeast(1)
-            val scaled = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
-            if (scaled != bitmap) {
-                bitmap.recycle()
-                bitmap = scaled
-            }
+        val imageView = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams((100 * density).toInt(), (64 * density).toInt())
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            val options = BitmapFactory.Options().apply { inSampleSize = 4 }
+            setImageBitmap(BitmapFactory.decodeFile(file.absolutePath, options))
         }
+        container.addView(imageView)
 
-        return bitmap
-    }
-
-    private fun addThumbnail(file: File) {
-        val imageView = ImageView(this)
-        val sizePx = (100 * resources.displayMetrics.density).toInt()
-        val params = LinearLayout.LayoutParams(sizePx, sizePx)
-        params.marginEnd = (8 * resources.displayMetrics.density).toInt()
-        imageView.layoutParams = params
-        imageView.scaleType = ImageView.ScaleType.CENTER_CROP
-
-        val options = BitmapFactory.Options().apply { inSampleSize = 4 }
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
-        imageView.setImageBitmap(bitmap)
-
-        thumbnailContainer.addView(imageView)
-    }
-
-    private fun rotateIfNeeded(bitmap: Bitmap?, file: File): Bitmap? {
-        if (bitmap == null) return null
-        return try {
-            val exif = ExifInterface(file.absolutePath)
-            val orientation = exif.getAttributeInt(
-                ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_NORMAL
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            val matrix = Matrix()
-            when (orientation) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                else -> return bitmap
+        }
+        row1.addView(smallButton("⟲") { showRotateOptions(file) })
+        row1.addView(smallButton("✕") { removePhotoAt(index) })
+        container.addView(row1)
+
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val leftBtn = smallButton("◀") { movePhoto(index, index - 1) }
+        val rightBtn = smallButton("▶") { movePhoto(index, index + 1) }
+        leftBtn.isEnabled = index > 0
+        rightBtn.isEnabled = index < photoFiles.size - 1
+        row2.addView(leftBtn)
+        row2.addView(rightBtn)
+        container.addView(row2)
+
+        return container
+    }
+
+    private fun smallButton(label: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            textSize = 12f
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(2, 2, 2, 2)
+            val density = resources.displayMetrics.density
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                (36 * density).toInt(),
+                1f
+            ).apply {
+                marginEnd = (2 * density).toInt()
             }
-            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            if (rotated != bitmap) bitmap.recycle()
-            rotated
-        } catch (e: Exception) {
-            bitmap
+            setOnClickListener { onClick() }
         }
     }
+
+    private fun removePhotoAt(index: Int) {
+        if (index !in photoFiles.indices) return
+        val file = photoFiles.removeAt(index)
+        file.delete()
+        refreshThumbnails()
+        updateStatus()
+    }
+
+    private fun movePhoto(from: Int, to: Int) {
+        if (from !in photoFiles.indices || to !in photoFiles.indices) return
+        val item = photoFiles.removeAt(from)
+        photoFiles.add(to, item)
+        refreshThumbnails()
+    }
+
+    // ---------- Döndürme ----------
+
+    private fun showRotateOptions(file: File) {
+        val options = arrayOf("Sağa Döndür (90°)", "Sola Döndür (90°)", "Ters Çevir (180°)", "Elle Döndür...")
+        AlertDialog.Builder(this)
+            .setTitle("Döndür")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> { ImageUtils.rotateFileBy(file, 90f); refreshThumbnails() }
+                    1 -> { ImageUtils.rotateFileBy(file, -90f); refreshThumbnails() }
+                    2 -> { ImageUtils.rotateFileBy(file, 180f); refreshThumbnails() }
+                    3 -> showManualRotateDialog(file)
+                }
+            }
+            .show()
+    }
+
+    private fun showManualRotateDialog(file: File) {
+        val density = resources.displayMetrics.density
+        val pad = (16 * density).toInt()
+
+        val dialogLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+
+        val previewImage = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (220 * density).toInt()
+            )
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        val degreeText = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 14f
+        }
+        val seekBar = SeekBar(this).apply {
+            max = 359
+            progress = 0
+        }
+
+        dialogLayout.addView(previewImage)
+        dialogLayout.addView(degreeText)
+        dialogLayout.addView(seekBar)
+
+        fun updatePreview(degrees: Int) {
+            degreeText.text = "$degrees°"
+            previewImage.setImageBitmap(ImageUtils.previewRotated(file, degrees.toFloat()))
+        }
+        updatePreview(0)
+
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                updatePreview(progress)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle("Elle Döndür")
+            .setView(dialogLayout)
+            .setPositiveButton("Uygula") { _, _ ->
+                ImageUtils.rotateFileBy(file, seekBar.progress.toFloat())
+                refreshThumbnails()
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    // ---------- Durum metni ----------
 
     private fun updateStatus() {
         statusText.text = if (photoFiles.isEmpty()) {
@@ -286,7 +347,42 @@ class MainActivity : AppCompatActivity() {
         shareButton.isEnabled = hasPdf
     }
 
-    private fun createPdf() {
+    // ---------- PDF oluşturma ----------
+
+    private fun promptForPdfNameAndCreate() {
+        if (photoFiles.isEmpty()) return
+
+        val defaultName = "Foto2PDF_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
+        val density = resources.displayMetrics.density
+        val pad = (20 * density).toInt()
+
+        val input = EditText(this).apply {
+            setText(defaultName)
+            setSelection(text.length)
+        }
+        val container = LinearLayout(this).apply {
+            setPadding(pad, pad / 2, pad, 0)
+            addView(input)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("PDF adı")
+            .setView(container)
+            .setPositiveButton("Oluştur") { _, _ ->
+                var name = input.text.toString().trim()
+                if (name.isEmpty()) name = defaultName
+                createPdf(sanitizeFileName(name))
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun sanitizeFileName(name: String): String {
+        val cleaned = name.replace(Regex("[^A-Za-z0-9ğüşıöçĞÜŞİÖÇ _-]"), "_")
+        return cleaned.ifBlank { "Foto2PDF" }
+    }
+
+    private fun createPdf(fileNameWithoutExtension: String) {
         if (photoFiles.isEmpty()) return
 
         val document = PdfDocument()
@@ -296,9 +392,7 @@ class MainActivity : AppCompatActivity() {
 
         var pageCount = 0
         for (file in photoFiles) {
-            // Fotoğraflar zaten çekilirken/eklenirken küçültülüp sıkıştırıldı,
-            // burada tekrar tüm çözünürlüğü okumamak için aynı sınırla açıyoruz.
-            val bitmap = loadDownsampledBitmap(file, MAX_IMAGE_DIMENSION) ?: continue
+            val bitmap = ImageUtils.loadDownsampledBitmap(file, ImageUtils.MAX_IMAGE_DIMENSION) ?: continue
 
             pageCount++
             val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageCount).create()
@@ -314,7 +408,7 @@ class MainActivity : AppCompatActivity() {
             val left = (pageWidth - scaledWidth) / 2f
             val top = (pageHeight - scaledHeight) / 2f
 
-            val matrix = Matrix()
+            val matrix = android.graphics.Matrix()
             matrix.postScale(scale, scale)
             matrix.postTranslate(left, top)
             canvas.drawBitmap(bitmap, matrix, null)
@@ -330,7 +424,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         val pdfDir = File(getExternalFilesDir(null), "pdfs").apply { mkdirs() }
-        val pdfFile = File(pdfDir, "Foto2PDF_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.pdf")
+        var pdfFile = File(pdfDir, "$fileNameWithoutExtension.pdf")
+        var counter = 1
+        while (pdfFile.exists()) {
+            pdfFile = File(pdfDir, "${fileNameWithoutExtension}_$counter.pdf")
+            counter++
+        }
 
         try {
             FileOutputStream(pdfFile).use { out ->
@@ -349,6 +448,8 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "PDF oluşturulamadı: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
+
+    // ---------- Paylaşma ----------
 
     private fun shareToPackage(packageName: String, displayName: String) {
         val file = lastPdfFile
