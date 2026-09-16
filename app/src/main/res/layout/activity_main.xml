@@ -167,12 +167,61 @@
             android:id="@+id/shareButton"
             android:layout_width="match_parent"
             android:layout_height="52dp"
+            android:layout_marginBottom="10dp"
             android:background="@drawable/bg_button_outline"
             android:enabled="false"
             android:text="Diğer Uygulamayla Paylaş"
             android:textAllCaps="false"
             android:textColor="@color/app_text_primary"
             android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/saveToDeviceButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="20dp"
+            android:background="@drawable/bg_button_outline"
+            android:enabled="false"
+            android:text="📥 Telefona Kaydet"
+            android:textAllCaps="false"
+            android:textColor="@color/app_text_primary"
+            android:textSize="15sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/app_divider"
+            android:layout_marginBottom="16dp" />
+
+        <Button
+            android:id="@+id/savedPdfsButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="24dp"
+            android:background="@drawable/bg_button_secondary"
+            android:text="📁 Kaydedilenler"
+            android:textAllCaps="false"
+            android:textColor="@color/app_text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="Bu uygulamanın tüm hakları Mehmet ARSLAN'a aittir. İzinsiz olarak kullanılamaz."
+            android:textColor="@color/app_text_secondary"
+            android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:gravity="center"
+            android:autoLink="email"
+            android:text="İletişim için: mehmet201564005@hotmail.com"
+            android:textColor="@color/app_text_secondary"
+            android:textColorLink="@color/app_primary"
+            android:textSize="11sp" />
 
     </LinearLayout>
 </ScrollView>
