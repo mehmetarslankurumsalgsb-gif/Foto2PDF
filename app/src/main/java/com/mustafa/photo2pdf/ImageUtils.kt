@@ -15,10 +15,10 @@ import java.io.FileOutputStream
 object ImageUtils {
 
     // Fotoğrafların en uzun kenarı bu değeri geçmeyecek şekilde küçültülür.
-    const val MAX_IMAGE_DIMENSION = 1600
+    const val MAX_IMAGE_DIMENSION = 2200
 
-    // JPEG sıkıştırma kalitesi (0-100). 75 iyi bir denge sağlar.
-    const val JPEG_QUALITY = 75
+    // JPEG sıkıştırma kalitesi (0-100). Belge/yazı netliği için yüksek tutuldu.
+    const val JPEG_QUALITY = 90
 
     /**
      * Verilen dosyadaki fotoğrafı okur, EXIF yönünü uygular, en uzun kenarı
