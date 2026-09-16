@@ -1,0 +1,37 @@
+name: APK Oluştur
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu al
+        uses: actions/checkout@v4
+
+      - name: Java kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Android SDK kur
+        uses: android-actions/setup-android@v3
+
+      - name: Gerekli SDK paketlerini indir
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Gradle'a çalıştırma izni ver
+        run: chmod +x ./gradlew
+
+      - name: APK'yı derle
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: APK'yı yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Foto2PDF-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
