@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -27,22 +28,27 @@ import java.util.Locale
 /**
  * Kullanıcının telefonun kendi kamera uygulamasına gitmeden, uygulama
  * içinden arka arkaya (her seferinde onay istemeden) fotoğraf çekmesini
- * sağlayan ekran. Çekilen her fotoğraf sol alttaki şeritte küçük bir
- * kare olarak sıralanır; her karenin üzerindeki çarpıya basarak o
- * fotoğraf anında silinebilir. "Bitti" butonuna basınca kalan tüm
- * fotoğrafların dosya yollarını MainActivity'ye geri döndürür.
+ * sağlayan ekran. Çekilen her fotoğraf, ekranın ortasından küçülüp sol
+ * alttaki şeride kayan kısa bir animasyonla listeye eklenir; her karenin
+ * üzerindeki çarpıya basarak o fotoğraf anında silinebilir. "Bitti"
+ * butonuna basınca kalan tüm fotoğrafların dosya yollarını
+ * MainActivity'ye geri döndürür.
  */
 class CaptureActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_CAPTURED_PATHS = "captured_paths"
+        private const val ANIM_DURATION_MS = 380L
     }
 
     private var imageCapture: ImageCapture? = null
     private val capturedFiles = mutableListOf<File>()
+    private var isCapturing = false
 
     private lateinit var countText: TextView
     private lateinit var thumbnailStripContainer: LinearLayout
+    private lateinit var captureAnimOverlay: FrameLayout
+    private lateinit var shutterButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,7 +57,8 @@ class CaptureActivity : AppCompatActivity() {
         val previewView = findViewById<PreviewView>(R.id.previewView)
         countText = findViewById(R.id.countText)
         thumbnailStripContainer = findViewById(R.id.thumbnailStripContainer)
-        val shutterButton = findViewById<Button>(R.id.shutterButton)
+        captureAnimOverlay = findViewById(R.id.captureAnimOverlay)
+        shutterButton = findViewById(R.id.shutterButton)
         val doneButton = findViewById<Button>(R.id.doneButton)
 
         startCamera(previewView)
@@ -92,6 +99,9 @@ class CaptureActivity : AppCompatActivity() {
 
     private fun takePhoto() {
         val capture = imageCapture ?: return
+        if (isCapturing) return
+        isCapturing = true
+        shutterButton.isEnabled = false
 
         val photosDir = File(getExternalFilesDir(null), "photos").apply { mkdirs() }
         val fileName = "PHOTO_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}.jpg"
@@ -106,10 +116,12 @@ class CaptureActivity : AppCompatActivity() {
                     ImageUtils.compressFileInPlace(file)
                     capturedFiles.add(file)
                     updateCountText()
-                    refreshThumbnailStrip()
+                    playCaptureAnimation(file)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
+                    isCapturing = false
+                    shutterButton.isEnabled = true
                     Toast.makeText(
                         this@CaptureActivity,
                         "Fotoğraf çekilemedi: ${exception.message}",
@@ -122,6 +134,56 @@ class CaptureActivity : AppCompatActivity() {
 
     private fun updateCountText() {
         countText.text = "${capturedFiles.size} fotoğraf çekildi"
+    }
+
+    // ---------- Çekim animasyonu: fotoğraf küçülüp sol alttaki şeride kayar ----------
+
+    private fun playCaptureAnimation(file: File) {
+        val density = resources.displayMetrics.density
+        val startWidth = (170 * density).toInt()
+        val startHeight = (220 * density).toInt()
+        val endSize = (56 * density).toInt()
+
+        val flying = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = ContextCompat.getDrawable(this@CaptureActivity, R.drawable.bg_thumbnail_card)
+            val options = BitmapFactory.Options().apply { inSampleSize = 4 }
+            setImageBitmap(BitmapFactory.decodeFile(file.absolutePath, options))
+        }
+
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val startLeft = (screenWidth - startWidth) / 2
+        val startTop = (screenHeight - startHeight) / 2
+
+        val layoutParams = FrameLayout.LayoutParams(startWidth, startHeight).apply {
+            leftMargin = startLeft
+            topMargin = startTop
+        }
+        captureAnimOverlay.addView(flying, layoutParams)
+
+        // Sol alttaki fotoğraf şeridine yaklaşık hedef konum (şeridin sol başı).
+        val targetLeft = (16 * density)
+        val targetTop = screenHeight - (150 * density)
+
+        val scale = endSize.toFloat() / startWidth.toFloat()
+        val translationX = targetLeft - startLeft
+        val translationY = targetTop - startTop
+
+        flying.animate()
+            .scaleX(scale)
+            .scaleY(scale)
+            .translationX(translationX)
+            .translationY(translationY)
+            .setDuration(ANIM_DURATION_MS)
+            .setInterpolator(AccelerateDecelerateInterpolator())
+            .withEndAction {
+                captureAnimOverlay.removeView(flying)
+                refreshThumbnailStrip()
+                isCapturing = false
+                shutterButton.isEnabled = true
+            }
+            .start()
     }
 
     // ---------- Sol alttaki küçük fotoğraf şeridi ----------
