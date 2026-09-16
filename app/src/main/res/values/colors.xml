@@ -1,0 +1,14 @@
+<resources>
+    <color name="app_background">#0F1115</color>
+    <color name="app_surface">#1B1E25</color>
+    <color name="app_surface_alt">#262A34</color>
+    <color name="app_primary">#7C5CFC</color>
+    <color name="app_primary_variant">#5B3DF0</color>
+    <color name="app_on_primary">#FFFFFF</color>
+    <color name="app_text_primary">#F5F5F7</color>
+    <color name="app_text_secondary">#9AA0AC</color>
+    <color name="app_divider">#2A2E38</color>
+    <color name="app_whatsapp">#25D366</color>
+    <color name="app_telegram">#2AABEE</color>
+    <color name="app_danger">#E05263</color>
+</resources>
