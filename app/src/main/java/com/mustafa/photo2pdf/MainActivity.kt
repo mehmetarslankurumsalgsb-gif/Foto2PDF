@@ -549,31 +549,32 @@ class MainActivity : AppCompatActivity() {
         if (photoFiles.isEmpty()) return
 
         val document = PdfDocument()
-        // A4 boyutu, 72 dpi noktasında yaklaşık 595 x 842
-        val pageWidth = 595
-        val pageHeight = 842
+        // Her sayfa, o fotoğrafın oranına göre boyutlandırılır; böylece
+        // fotoğraf sayfayı tam kaplar, üstte/altta/yanlarda boşluk kalmaz.
+        // Genişlik A4 genişliğine (595pt) sabitlenir, yükseklik fotoğrafın
+        // oranına göre hesaplanır.
+        val referenceWidth = 595f
 
         var pageCount = 0
         for (file in photoFiles) {
             val bitmap = ImageUtils.loadDownsampledBitmap(file, ImageUtils.MAX_IMAGE_DIMENSION) ?: continue
 
+            val pageWidth = referenceWidth
+            val pageHeight = referenceWidth * (bitmap.height.toFloat() / bitmap.width.toFloat())
+
             pageCount++
-            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageCount).create()
+            val pageInfo = PdfDocument.PageInfo.Builder(
+                pageWidth.toInt().coerceAtLeast(1),
+                pageHeight.toInt().coerceAtLeast(1),
+                pageCount
+            ).create()
             val page = document.startPage(pageInfo)
             val canvas: Canvas = page.canvas
 
-            val scale = minOf(
-                pageWidth.toFloat() / bitmap.width,
-                pageHeight.toFloat() / bitmap.height
-            )
-            val scaledWidth = bitmap.width * scale
-            val scaledHeight = bitmap.height * scale
-            val left = (pageWidth - scaledWidth) / 2f
-            val top = (pageHeight - scaledHeight) / 2f
+            val scale = pageWidth / bitmap.width
 
             val matrix = android.graphics.Matrix()
             matrix.postScale(scale, scale)
-            matrix.postTranslate(left, top)
             canvas.drawBitmap(bitmap, matrix, null)
 
             document.finishPage(page)
