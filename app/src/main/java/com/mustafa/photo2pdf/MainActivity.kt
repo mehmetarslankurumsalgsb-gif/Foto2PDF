@@ -3,6 +3,7 @@ package com.mustafa.photo2pdf
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -10,7 +11,10 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.DragEvent
 import android.view.Gravity
 import android.view.View
@@ -49,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var whatsappButton: Button
     private lateinit var telegramButton: Button
     private lateinit var shareButton: Button
+    private lateinit var saveToDeviceButton: Button
 
     private val captureActivityLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -83,6 +88,15 @@ class MainActivity : AppCompatActivity() {
                 if (addedCount < uris.size) {
                     Toast.makeText(this, "Bazı fotoğraflar eklenemedi.", Toast.LENGTH_SHORT).show()
                 }
+            }
+        }
+
+    private val requestStoragePermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                saveToDevice()
+            } else {
+                Toast.makeText(this, "Kaydetmek için depolama izni vermeniz gerekiyor.", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -121,6 +135,7 @@ class MainActivity : AppCompatActivity() {
         whatsappButton = findViewById(R.id.whatsappButton)
         telegramButton = findViewById(R.id.telegramButton)
         shareButton = findViewById(R.id.shareButton)
+        saveToDeviceButton = findViewById(R.id.saveToDeviceButton)
 
         findViewById<Button>(R.id.takePhotoButton).setOnClickListener {
             checkPermissionAndOpenCapture()
@@ -139,6 +154,11 @@ class MainActivity : AppCompatActivity() {
         whatsappButton.setOnClickListener { shareToPackage("com.whatsapp", "WhatsApp") }
         telegramButton.setOnClickListener { shareToPackage("org.telegram.messenger", "Telegram") }
         shareButton.setOnClickListener { shareGeneric() }
+        saveToDeviceButton.setOnClickListener { checkPermissionAndSaveToDevice() }
+
+        findViewById<Button>(R.id.savedPdfsButton).setOnClickListener {
+            startActivity(Intent(this, SavedPdfsActivity::class.java))
+        }
 
         findViewById<Button>(R.id.clearButton).setOnClickListener {
             photoFiles.forEach { it.delete() }
@@ -505,9 +525,62 @@ class MainActivity : AppCompatActivity() {
         whatsappButton.isEnabled = hasPdf
         telegramButton.isEnabled = hasPdf
         shareButton.isEnabled = hasPdf
+        saveToDeviceButton.isEnabled = hasPdf
         whatsappButton.alpha = alpha
         telegramButton.alpha = alpha
         shareButton.alpha = alpha
+        saveToDeviceButton.alpha = alpha
+    }
+
+    // ---------- Telefona kaydetme (İndirilenler klasörü) ----------
+
+    private fun checkPermissionAndSaveToDevice() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10 ve üzeri MediaStore kullanır, ekstra izin gerekmez.
+            saveToDevice()
+        } else {
+            when {
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                    PackageManager.PERMISSION_GRANTED -> saveToDevice()
+                else -> requestStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
+    }
+
+    private fun saveToDevice() {
+        val file = lastPdfFile
+        if (file == null || !file.exists()) {
+            Toast.makeText(this, "Önce PDF oluşturman gerekiyor.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri == null) {
+                    Toast.makeText(this, "Kaydedilemedi.", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    file.inputStream().use { input -> input.copyTo(out) }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                downloadsDir.mkdirs()
+                val destFile = File(downloadsDir, file.name)
+                file.inputStream().use { input ->
+                    FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                }
+            }
+            Toast.makeText(this, "PDF, telefonunun İndirilenler klasörüne kaydedildi.", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     // ---------- PDF oluşturma ----------
