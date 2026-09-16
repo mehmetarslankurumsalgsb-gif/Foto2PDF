@@ -2,17 +2,21 @@ package com.mustafa.photo2pdf
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Bundle
+import android.view.DragEvent
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -24,6 +28,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.yalantis.ucrop.UCrop
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -34,6 +39,9 @@ class MainActivity : AppCompatActivity() {
 
     private val photoFiles = mutableListOf<File>()
     private var lastPdfFile: File? = null
+
+    private var pendingCropSourceFile: File? = null
+    private var pendingCropDestFile: File? = null
 
     private lateinit var statusText: TextView
     private lateinit var thumbnailContainer: LinearLayout
@@ -74,6 +82,31 @@ class MainActivity : AppCompatActivity() {
                 updateStatus()
                 if (addedCount < uris.size) {
                     Toast.makeText(this, "Bazı fotoğraflar eklenemedi.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+    private val cropLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val src = pendingCropSourceFile
+            val dest = pendingCropDestFile
+            pendingCropSourceFile = null
+            pendingCropDestFile = null
+
+            if (result.resultCode == RESULT_OK && src != null && dest != null && dest.exists()) {
+                ImageUtils.compressFileInPlace(dest)
+                val idx = photoFiles.indexOf(src)
+                if (idx >= 0) {
+                    photoFiles[idx] = dest
+                } else {
+                    photoFiles.add(dest)
+                }
+                src.delete()
+                refreshThumbnails()
+            } else {
+                dest?.delete()
+                if (result.resultCode != RESULT_CANCELED) {
+                    Toast.makeText(this, "Kırpma tamamlanamadı.", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -163,82 +196,168 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- Fotoğraf listesi / küçük resimler ----------
+    // ---------- Fotoğraf listesi / kartlar (2 sütunlu) ----------
 
     private fun refreshThumbnails() {
         thumbnailContainer.removeAllViews()
-        for ((index, file) in photoFiles.withIndex()) {
-            thumbnailContainer.addView(buildThumbnailItem(index, file))
+        val density = resources.displayMetrics.density
+        var i = 0
+        while (i < photoFiles.size) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = if (i == 0) 0 else (12 * density).toInt()
+                }
+            }
+
+            row.addView(buildThumbnailCard(i, photoFiles[i]), rowCardParams(marginEnd = true))
+
+            if (i + 1 < photoFiles.size) {
+                row.addView(buildThumbnailCard(i + 1, photoFiles[i + 1]), rowCardParams(marginEnd = false))
+            } else {
+                // Tek sayıda fotoğraf varsa hizalamayı korumak için boş alan bırak.
+                row.addView(View(this), LinearLayout.LayoutParams(0, 0, 1f))
+            }
+
+            thumbnailContainer.addView(row)
+            i += 2
         }
     }
 
-    private fun buildThumbnailItem(index: Int, file: File): View {
+    private fun rowCardParams(marginEnd: Boolean): LinearLayout.LayoutParams {
         val density = resources.displayMetrics.density
-        val itemWidth = (108 * density).toInt()
+        return LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            if (marginEnd) this.marginEnd = (6 * density).toInt() else this.marginStart = (6 * density).toInt()
+        }
+    }
 
-        val container = LinearLayout(this).apply {
+    private fun buildThumbnailCard(index: Int, file: File): View {
+        val density = resources.displayMetrics.density
+
+        val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(itemWidth, LinearLayout.LayoutParams.MATCH_PARENT).apply {
-                marginEnd = (8 * density).toInt()
-            }
-            gravity = Gravity.CENTER_HORIZONTAL
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_thumbnail_card)
+            val pad = (6 * density).toInt()
+            setPadding(pad, pad, pad, pad)
+        }
+
+        val imageFrame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (190 * density).toInt()
+            )
         }
 
         val imageView = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams((100 * density).toInt(), (64 * density).toInt())
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
             scaleType = ImageView.ScaleType.CENTER_CROP
             val options = BitmapFactory.Options().apply { inSampleSize = 4 }
             setImageBitmap(BitmapFactory.decodeFile(file.absolutePath, options))
         }
-        container.addView(imageView)
+        imageFrame.addView(imageView)
 
-        val row1 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-        row1.addView(smallButton("⟲") { showRotateOptions(file) })
-        row1.addView(smallButton("✕") { removePhotoAt(index) })
-        container.addView(row1)
-
-        val row2 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-        val leftBtn = smallButton("◀") { movePhoto(index, index - 1) }
-        val rightBtn = smallButton("▶") { movePhoto(index, index + 1) }
-        leftBtn.isEnabled = index > 0
-        rightBtn.isEnabled = index < photoFiles.size - 1
-        row2.addView(leftBtn)
-        row2.addView(rightBtn)
-        container.addView(row2)
-
-        return container
-    }
-
-    private fun smallButton(label: String, onClick: () -> Unit): Button {
-        return Button(this).apply {
-            text = label
+        val badge = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START
+            ).apply {
+                leftMargin = (8 * density).toInt()
+                topMargin = (8 * density).toInt()
+            }
+            text = "${index + 1}"
+            setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.white))
             textSize = 12f
+            setPadding((8 * density).toInt(), (3 * density).toInt(), (8 * density).toInt(), (3 * density).toInt())
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_badge)
+        }
+        imageFrame.addView(badge)
+
+        val deleteBtn = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                (30 * density).toInt(),
+                (30 * density).toInt(),
+                Gravity.TOP or Gravity.END
+            ).apply {
+                rightMargin = (8 * density).toInt()
+                topMargin = (8 * density).toInt()
+            }
+            text = "✕"
+            setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.white))
+            textSize = 15f
+            gravity = Gravity.CENTER
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_icon_button)
+            setOnClickListener { removePhotoAt(index) }
+        }
+        imageFrame.addView(deleteBtn)
+
+        // Basılı tutup sürükleyerek sıra değiştirme
+        imageView.setOnLongClickListener {
+            val clipData = ClipData.newPlainText("photo_index", index.toString())
+            val shadow = View.DragShadowBuilder(card)
+            card.startDragAndDrop(clipData, shadow, null, 0)
+            true
+        }
+        card.setOnDragListener(cardDragListener(index))
+
+        card.addView(imageFrame)
+
+        val editButton = Button(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (42 * density).toInt()
+            ).apply {
+                topMargin = (8 * density).toInt()
+            }
+            text = "⋯ Düzenle"
+            textSize = 13f
+            setAllCaps(false)
             minWidth = 0
             minimumWidth = 0
             minHeight = 0
             minimumHeight = 0
-            setPadding(2, 2, 2, 2)
-            val density = resources.displayMetrics.density
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                (36 * density).toInt(),
-                1f
-            ).apply {
-                marginEnd = (2 * density).toInt()
+            setPadding(0, 0, 0, 0)
+            background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_button_secondary)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.app_text_primary))
+            setOnClickListener { showItemMenu(index, file) }
+        }
+        card.addView(editButton)
+
+        return card
+    }
+
+    private fun cardDragListener(targetIndex: Int): View.OnDragListener {
+        return View.OnDragListener { view, event ->
+            when (event.action) {
+                DragEvent.ACTION_DRAG_STARTED -> true
+                DragEvent.ACTION_DRAG_ENTERED -> {
+                    view.alpha = 0.6f
+                    true
+                }
+                DragEvent.ACTION_DRAG_EXITED -> {
+                    view.alpha = 1f
+                    true
+                }
+                DragEvent.ACTION_DROP -> {
+                    view.alpha = 1f
+                    val sourceIndex = event.clipData?.getItemAt(0)?.text?.toString()?.toIntOrNull()
+                    if (sourceIndex != null && sourceIndex != targetIndex) {
+                        movePhoto(sourceIndex, targetIndex)
+                    }
+                    true
+                }
+                DragEvent.ACTION_DRAG_ENDED -> {
+                    view.alpha = 1f
+                    true
+                }
+                else -> true
             }
-            setOnClickListener { onClick() }
         }
     }
 
@@ -257,18 +376,29 @@ class MainActivity : AppCompatActivity() {
         refreshThumbnails()
     }
 
-    // ---------- Döndürme ----------
+    // ---------- Fotoğraf düzenleme menüsü (döndür / kırp / taşı) ----------
 
-    private fun showRotateOptions(file: File) {
-        val options = arrayOf("Sağa Döndür (90°)", "Sola Döndür (90°)", "Ters Çevir (180°)", "Elle Döndür...")
+    private fun showItemMenu(index: Int, file: File) {
+        val options = arrayOf(
+            "Sağa Döndür (90°)",
+            "Sola Döndür (90°)",
+            "Ters Çevir (180°)",
+            "Kırp",
+            "Elle Döndür...",
+            "Sola Taşı",
+            "Sağa Taşı"
+        )
         AlertDialog.Builder(this)
-            .setTitle("Döndür")
+            .setTitle("${index + 1}. fotoğraf")
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> { ImageUtils.rotateFileBy(file, 90f); refreshThumbnails() }
                     1 -> { ImageUtils.rotateFileBy(file, -90f); refreshThumbnails() }
                     2 -> { ImageUtils.rotateFileBy(file, 180f); refreshThumbnails() }
-                    3 -> showManualRotateDialog(file)
+                    3 -> startCrop(file)
+                    4 -> showManualRotateDialog(file)
+                    5 -> movePhoto(index, index - 1)
+                    6 -> movePhoto(index, index + 1)
                 }
             }
             .show()
@@ -329,6 +459,34 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ---------- Kırpma (uCrop) ----------
+
+    private fun startCrop(file: File) {
+        val destFile = File(file.parentFile, "CROP_${System.currentTimeMillis()}_${file.name}")
+        pendingCropSourceFile = file
+        pendingCropDestFile = destFile
+
+        val sourceUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val destUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", destFile)
+
+        val options = UCrop.Options().apply {
+            setCompressionFormat(Bitmap.CompressFormat.JPEG)
+            setCompressionQuality(90)
+            setFreeStyleCropEnabled(true)
+            setToolbarTitle("Kırp")
+            setToolbarColor(ContextCompat.getColor(this@MainActivity, R.color.app_background))
+            setStatusBarColor(ContextCompat.getColor(this@MainActivity, R.color.app_background))
+            setToolbarWidgetColor(ContextCompat.getColor(this@MainActivity, R.color.app_text_primary))
+            setActiveControlsWidgetColor(ContextCompat.getColor(this@MainActivity, R.color.app_primary))
+        }
+
+        val cropIntent = UCrop.of(sourceUri, destUri)
+            .withOptions(options)
+            .getIntent(this)
+        cropIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        cropLauncher.launch(cropIntent)
+    }
+
     // ---------- Durum metni ----------
 
     private fun updateStatus() {
@@ -338,13 +496,18 @@ class MainActivity : AppCompatActivity() {
             "${photoFiles.size} fotoğraf hazır."
         }
         createPdfButton.isEnabled = photoFiles.isNotEmpty()
+        createPdfButton.alpha = if (createPdfButton.isEnabled) 1f else 0.4f
     }
 
     private fun updatePdfButtons() {
         val hasPdf = lastPdfFile != null
+        val alpha = if (hasPdf) 1f else 0.4f
         whatsappButton.isEnabled = hasPdf
         telegramButton.isEnabled = hasPdf
         shareButton.isEnabled = hasPdf
+        whatsappButton.alpha = alpha
+        telegramButton.alpha = alpha
+        shareButton.alpha = alpha
     }
 
     // ---------- PDF oluşturma ----------
