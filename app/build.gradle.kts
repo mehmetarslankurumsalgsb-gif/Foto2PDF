@@ -11,8 +11,8 @@ android {
         applicationId = "com.mustafa.photo2pdf"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
     }
 
     buildTypes {
@@ -51,4 +51,13 @@ dependencies {
 
     // Fotoğraf kırpma ekranı için
     implementation("com.github.yalantis:ucrop:2.2.9")
+
+    // Otomatik belge algılama (kenar bulma, kesme, düzeltme)
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+
+    // OCR - fotoğraftaki yazıyı okuma (internetsiz çalışır)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
+    // Şifreli ve aranabilir PDF oluşturma
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 }

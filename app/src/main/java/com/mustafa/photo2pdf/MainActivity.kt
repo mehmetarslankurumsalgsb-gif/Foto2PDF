@@ -3,38 +3,48 @@ package com.mustafa.photo2pdf
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.text.InputType
 import android.view.DragEvent
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.yalantis.ucrop.UCrop
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -46,10 +56,12 @@ class MainActivity : AppCompatActivity() {
 
     private var pendingCropSourceFile: File? = null
     private var pendingCropDestFile: File? = null
+    private var pendingStorageAction: (() -> Unit)? = null
 
     private lateinit var statusText: TextView
     private lateinit var thumbnailContainer: LinearLayout
     private lateinit var createPdfButton: Button
+    private lateinit var ocrButton: Button
     private lateinit var whatsappButton: Button
     private lateinit var telegramButton: Button
     private lateinit var shareButton: Button
@@ -78,23 +90,24 @@ class MainActivity : AppCompatActivity() {
 
     private val pickImagesLauncher =
         registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
-            if (uris.isNotEmpty()) {
-                var addedCount = 0
-                for (uri in uris) {
-                    if (importImageFromUri(uri)) addedCount++
-                }
-                refreshThumbnails()
-                updateStatus()
-                if (addedCount < uris.size) {
-                    Toast.makeText(this, "Bazı fotoğraflar eklenemedi.", Toast.LENGTH_SHORT).show()
-                }
+            if (uris.isNotEmpty()) importUris(uris)
+        }
+
+    private val documentScannerLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val scanResult = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
+                val uris = scanResult?.pages?.map { it.imageUri } ?: emptyList()
+                if (uris.isNotEmpty()) importUris(uris)
             }
         }
 
     private val requestStoragePermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val action = pendingStorageAction
+            pendingStorageAction = null
             if (granted) {
-                saveToDevice()
+                action?.invoke()
             } else {
                 Toast.makeText(this, "Kaydetmek için depolama izni vermeniz gerekiyor.", Toast.LENGTH_SHORT).show()
             }
@@ -132,10 +145,15 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         thumbnailContainer = findViewById(R.id.thumbnailContainer)
         createPdfButton = findViewById(R.id.createPdfButton)
+        ocrButton = findViewById(R.id.ocrButton)
         whatsappButton = findViewById(R.id.whatsappButton)
         telegramButton = findViewById(R.id.telegramButton)
         shareButton = findViewById(R.id.shareButton)
         saveToDeviceButton = findViewById(R.id.saveToDeviceButton)
+
+        findViewById<Button>(R.id.scanDocumentButton).setOnClickListener {
+            startDocumentScan()
+        }
 
         findViewById<Button>(R.id.takePhotoButton).setOnClickListener {
             checkPermissionAndOpenCapture()
@@ -147,14 +165,13 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        createPdfButton.setOnClickListener {
-            promptForPdfNameAndCreate()
-        }
+        createPdfButton.setOnClickListener { showPdfOptionsDialog() }
+        ocrButton.setOnClickListener { startOcr() }
 
         whatsappButton.setOnClickListener { shareToPackage("com.whatsapp", "WhatsApp") }
         telegramButton.setOnClickListener { shareToPackage("org.telegram.messenger", "Telegram") }
         shareButton.setOnClickListener { shareGeneric() }
-        saveToDeviceButton.setOnClickListener { checkPermissionAndSaveToDevice() }
+        saveToDeviceButton.setOnClickListener { withStoragePermission { saveToDevice() } }
 
         findViewById<Button>(R.id.savedPdfsButton).setOnClickListener {
             startActivity(Intent(this, SavedPdfsActivity::class.java))
@@ -173,6 +190,59 @@ class MainActivity : AppCompatActivity() {
         updateStatus()
     }
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun isAlive(): Boolean = !isFinishing && !isDestroyed
+
+    // ---------- Bekleme penceresi ----------
+
+    private fun showProgress(message: String): Pair<AlertDialog, TextView> {
+        val pad = dp(20)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        val label = TextView(this).apply {
+            text = message
+            textSize = 15f
+            setPadding(pad, 0, 0, 0)
+        }
+        layout.addView(ProgressBar(this))
+        layout.addView(label)
+        val dialog = AlertDialog.Builder(this)
+            .setView(layout)
+            .setCancelable(false)
+            .create()
+        dialog.show()
+        return dialog to label
+    }
+
+    // ---------- Otomatik belge tarama (kenar bulma, kesme, düzeltme) ----------
+
+    private fun startDocumentScan() {
+        val options = GmsDocumentScannerOptions.Builder()
+            .setGalleryImportAllowed(true)
+            .setPageLimit(50)
+            .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
+            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+            .build()
+
+        GmsDocumentScanning.getClient(options)
+            .getStartScanIntent(this)
+            .addOnSuccessListener { intentSender ->
+                documentScannerLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+            }
+            .addOnFailureListener {
+                Toast.makeText(
+                    this,
+                    "Belge tarayıcı açılamadı. İlk kullanımda internet gerekebilir; " +
+                        "telefonda Google Play Hizmetleri olmalı.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
+
     // ---------- Fotoğraf çekme (uygulama içi, arka arkaya) ----------
 
     private fun checkPermissionAndOpenCapture() {
@@ -187,32 +257,48 @@ class MainActivity : AppCompatActivity() {
         captureActivityLauncher.launch(Intent(this, CaptureActivity::class.java))
     }
 
-    // ---------- Galeriden ekleme ----------
+    // ---------- Galeriden / tarayıcıdan ekleme ----------
+
+    private fun importUris(uris: List<Uri>) {
+        val (dialog, label) = showProgress("Fotoğraflar ekleniyor...")
+        Thread {
+            val added = mutableListOf<File>()
+            uris.forEachIndexed { index, uri ->
+                runOnUiThread { label.text = "Fotoğraflar ekleniyor... (${index + 1}/${uris.size})" }
+                importImageFromUri(uri)?.let { added.add(it) }
+            }
+            runOnUiThread {
+                if (!isAlive()) return@runOnUiThread
+                dialog.dismiss()
+                photoFiles.addAll(added)
+                refreshThumbnails()
+                updateStatus()
+                if (added.size < uris.size) {
+                    Toast.makeText(this, "Bazı fotoğraflar eklenemedi.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
 
     /**
-     * Galeriden seçilen bir görseli uygulamanın kendi klasörüne kopyalar,
-     * boyutunu küçültüp sıkıştırır ve listeye ekler. Başarılıysa true döner.
+     * Bir görseli uygulamanın kendi klasörüne kopyalar, boyutunu küçültüp
+     * sıkıştırır. Başarılıysa oluşan dosyayı döndürür. Arka planda çağrılır.
      */
-    private fun importImageFromUri(uri: Uri): Boolean {
+    private fun importImageFromUri(uri: Uri): File? {
         return try {
             val photosDir = File(getExternalFilesDir(null), "photos").apply { mkdirs() }
-            val fileName = "GALLERY_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}.jpg"
-            val destFile = File(photosDir, fileName)
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+            val destFile = File(photosDir, "IMPORT_${stamp}_${System.nanoTime()}.jpg")
 
             contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(destFile).use { output -> input.copyTo(output) }
-            } ?: return false
+            } ?: return null
 
             ImageUtils.compressFileInPlace(destFile)
 
-            if (!destFile.exists() || destFile.length() == 0L) {
-                return false
-            }
-
-            photoFiles.add(destFile)
-            true
+            if (!destFile.exists() || destFile.length() == 0L) null else destFile
         } catch (e: Exception) {
-            false
+            null
         }
     }
 
@@ -220,7 +306,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshThumbnails() {
         thumbnailContainer.removeAllViews()
-        val density = resources.displayMetrics.density
         var i = 0
         while (i < photoFiles.size) {
             val row = LinearLayout(this).apply {
@@ -229,7 +314,7 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    topMargin = if (i == 0) 0 else (12 * density).toInt()
+                    topMargin = if (i == 0) 0 else dp(12)
                 }
             }
 
@@ -248,26 +333,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun rowCardParams(marginEnd: Boolean): LinearLayout.LayoutParams {
-        val density = resources.displayMetrics.density
         return LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            if (marginEnd) this.marginEnd = (6 * density).toInt() else this.marginStart = (6 * density).toInt()
+            if (marginEnd) this.marginEnd = dp(6) else this.marginStart = dp(6)
         }
     }
 
     private fun buildThumbnailCard(index: Int, file: File): View {
-        val density = resources.displayMetrics.density
-
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_thumbnail_card)
-            val pad = (6 * density).toInt()
-            setPadding(pad, pad, pad, pad)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
 
         val imageFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (190 * density).toInt()
+                dp(190)
             )
         }
 
@@ -288,25 +369,21 @@ class MainActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.START
             ).apply {
-                leftMargin = (8 * density).toInt()
-                topMargin = (8 * density).toInt()
+                leftMargin = dp(8)
+                topMargin = dp(8)
             }
             text = "${index + 1}"
             setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.white))
             textSize = 12f
-            setPadding((8 * density).toInt(), (3 * density).toInt(), (8 * density).toInt(), (3 * density).toInt())
+            setPadding(dp(8), dp(3), dp(8), dp(3))
             background = ContextCompat.getDrawable(this@MainActivity, R.drawable.bg_badge)
         }
         imageFrame.addView(badge)
 
         val deleteBtn = TextView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                (30 * density).toInt(),
-                (30 * density).toInt(),
-                Gravity.TOP or Gravity.END
-            ).apply {
-                rightMargin = (8 * density).toInt()
-                topMargin = (8 * density).toInt()
+            layoutParams = FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP or Gravity.END).apply {
+                rightMargin = dp(8)
+                topMargin = dp(8)
             }
             text = "✕"
             setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.white))
@@ -331,9 +408,9 @@ class MainActivity : AppCompatActivity() {
         val editButton = Button(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (42 * density).toInt()
+                dp(42)
             ).apply {
-                topMargin = (8 * density).toInt()
+                topMargin = dp(8)
             }
             text = "⋯ Düzenle"
             textSize = 13f
@@ -396,7 +473,7 @@ class MainActivity : AppCompatActivity() {
         refreshThumbnails()
     }
 
-    // ---------- Fotoğraf düzenleme menüsü (döndür / kırp / taşı) ----------
+    // ---------- Fotoğraf düzenleme menüsü ----------
 
     private fun showItemMenu(index: Int, file: File) {
         val options = arrayOf(
@@ -404,6 +481,7 @@ class MainActivity : AppCompatActivity() {
             "Sola Döndür (90°)",
             "Ters Çevir (180°)",
             "Kırp",
+            "Filtre Uygula...",
             "Elle Döndür...",
             "Sola Taşı",
             "Sağa Taşı"
@@ -416,17 +494,75 @@ class MainActivity : AppCompatActivity() {
                     1 -> { ImageUtils.rotateFileBy(file, -90f); refreshThumbnails() }
                     2 -> { ImageUtils.rotateFileBy(file, 180f); refreshThumbnails() }
                     3 -> startCrop(file)
-                    4 -> showManualRotateDialog(file)
-                    5 -> movePhoto(index, index - 1)
-                    6 -> movePhoto(index, index + 1)
+                    4 -> showFilterDialog(file)
+                    5 -> showManualRotateDialog(file)
+                    6 -> movePhoto(index, index - 1)
+                    7 -> movePhoto(index, index + 1)
                 }
             }
             .show()
     }
 
+    // ---------- Filtreler ----------
+
+    private fun showFilterDialog(file: File) {
+        val filterNames = arrayOf(
+            "Belge (beyaz kağıt, koyu yazı, gölgesiz)",
+            "Gri tonlama",
+            "Renkleri canlandır"
+        )
+        val filters = arrayOf(
+            ImageUtils.Filter.DOCUMENT,
+            ImageUtils.Filter.GRAY,
+            ImageUtils.Filter.ENHANCE
+        )
+        var selected = 0
+
+        val extra = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), 0)
+        }
+        val applyAll = CheckBox(this).apply { text = "Tüm fotoğraflara uygula" }
+        val note = TextView(this).apply {
+            text = "Not: Filtre geri alınamaz."
+            textSize = 12f
+        }
+        extra.addView(applyAll)
+        extra.addView(note)
+
+        AlertDialog.Builder(this)
+            .setTitle("Filtre seç")
+            .setSingleChoiceItems(filterNames, 0) { _, which -> selected = which }
+            .setView(extra)
+            .setPositiveButton("Uygula") { _, _ ->
+                val targets = if (applyAll.isChecked) photoFiles.toList() else listOf(file)
+                applyFilterInBackground(targets, filters[selected])
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun applyFilterInBackground(files: List<File>, filter: ImageUtils.Filter) {
+        val (dialog, label) = showProgress("Filtre uygulanıyor...")
+        Thread {
+            var failed = 0
+            files.forEachIndexed { index, file ->
+                runOnUiThread { label.text = "Filtre uygulanıyor... (${index + 1}/${files.size})" }
+                if (!ImageUtils.applyFilter(file, filter)) failed++
+            }
+            runOnUiThread {
+                if (!isAlive()) return@runOnUiThread
+                dialog.dismiss()
+                refreshThumbnails()
+                if (failed > 0) {
+                    Toast.makeText(this, "$failed fotoğrafa filtre uygulanamadı.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
+
     private fun showManualRotateDialog(file: File) {
-        val density = resources.displayMetrics.density
-        val pad = (16 * density).toInt()
+        val pad = dp(16)
 
         val dialogLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -436,7 +572,7 @@ class MainActivity : AppCompatActivity() {
         val previewImage = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (220 * density).toInt()
+                dp(220)
             )
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -507,7 +643,7 @@ class MainActivity : AppCompatActivity() {
         cropLauncher.launch(cropIntent)
     }
 
-    // ---------- Durum metni ----------
+    // ---------- Durum ve butonlar ----------
 
     private fun updateStatus() {
         statusText.text = if (photoFiles.isEmpty()) {
@@ -515,8 +651,11 @@ class MainActivity : AppCompatActivity() {
         } else {
             "${photoFiles.size} fotoğraf hazır."
         }
-        createPdfButton.isEnabled = photoFiles.isNotEmpty()
-        createPdfButton.alpha = if (createPdfButton.isEnabled) 1f else 0.4f
+        val hasPhotos = photoFiles.isNotEmpty()
+        createPdfButton.isEnabled = hasPhotos
+        createPdfButton.alpha = if (hasPhotos) 1f else 0.4f
+        ocrButton.isEnabled = hasPhotos
+        ocrButton.alpha = if (hasPhotos) 1f else 0.4f
     }
 
     private fun updatePdfButtons() {
@@ -532,18 +671,108 @@ class MainActivity : AppCompatActivity() {
         saveToDeviceButton.alpha = alpha
     }
 
+    // ---------- OCR: yazıyı okuma ----------
+
+    private fun startOcr() {
+        if (photoFiles.isEmpty()) return
+        val files = photoFiles.toList()
+        val (dialog, label) = showProgress("Yazılar okunuyor...")
+        Thread {
+            val text: String? = try {
+                DocumentTools.readText(files) { page ->
+                    runOnUiThread { label.text = "Yazılar okunuyor... ($page/${files.size})" }
+                }
+            } catch (e: Throwable) {
+                null
+            }
+            runOnUiThread {
+                if (!isAlive()) return@runOnUiThread
+                dialog.dismiss()
+                when {
+                    text == null -> Toast.makeText(this, "Yazı okunamadı, tekrar deneyin.", Toast.LENGTH_LONG).show()
+                    text.isBlank() -> Toast.makeText(this, "Fotoğraflarda yazı bulunamadı.", Toast.LENGTH_LONG).show()
+                    else -> showOcrResult(text)
+                }
+            }
+        }.start()
+    }
+
+    private fun showOcrResult(text: String) {
+        val pad = dp(16)
+        val textView = TextView(this).apply {
+            this.text = text
+            textSize = 15f
+            setTextIsSelectable(true)
+            setPadding(pad, pad, pad, pad)
+        }
+        val scroll = ScrollView(this).apply { addView(textView) }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Okunan Yazı")
+            .setView(scroll)
+            .setPositiveButton("Kopyala", null)
+            .setNeutralButton("TXT Kaydet", null)
+            .setNegativeButton("Kapat", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Okunan yazı", text))
+                Toast.makeText(this, "Yazı kopyalandı.", Toast.LENGTH_SHORT).show()
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                withStoragePermission { saveTextToDevice(text) }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun saveTextToDevice(text: String) {
+        val stamp = SimpleDateFormat("dd.MM.yyyy HH.mm.ss", Locale("tr")).format(Date())
+        val fileName = "Okunan Yazı $stamp.txt"
+        try {
+            writeToDownloads(fileName, "text/plain") { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+            }
+            Toast.makeText(this, "\"$fileName\" İndirilenler klasörüne kaydedildi.", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // ---------- Telefona kaydetme (İndirilenler klasörü) ----------
 
-    private fun checkPermissionAndSaveToDevice() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    private fun withStoragePermission(action: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
             // Android 10 ve üzeri MediaStore kullanır, ekstra izin gerekmez.
-            saveToDevice()
+            action()
         } else {
-            when {
-                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
-                    PackageManager.PERMISSION_GRANTED -> saveToDevice()
-                else -> requestStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            pendingStorageAction = action
+            requestStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
+
+    private fun writeToDownloads(fileName: String, mimeType: String, writer: (OutputStream) -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Dosya oluşturulamadı")
+            val out = contentResolver.openOutputStream(uri)
+                ?: throw IllegalStateException("Dosya açılamadı")
+            out.use { writer(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            downloadsDir.mkdirs()
+            FileOutputStream(File(downloadsDir, fileName)).use { writer(it) }
         }
     }
 
@@ -554,28 +783,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                if (uri == null) {
-                    Toast.makeText(this, "Kaydedilemedi.", Toast.LENGTH_SHORT).show()
-                    return
-                }
-                contentResolver.openOutputStream(uri)?.use { out ->
-                    file.inputStream().use { input -> input.copyTo(out) }
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                downloadsDir.mkdirs()
-                val destFile = File(downloadsDir, file.name)
-                file.inputStream().use { input ->
-                    FileOutputStream(destFile).use { output -> input.copyTo(output) }
-                }
+            writeToDownloads(file.name, "application/pdf") { out ->
+                file.inputStream().use { input -> input.copyTo(out) }
             }
             Toast.makeText(this, "PDF, telefonunun İndirilenler klasörüne kaydedildi.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
@@ -585,81 +794,105 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- PDF oluşturma ----------
 
-    private fun promptForPdfNameAndCreate() {
+    private fun showPdfOptionsDialog() {
         if (photoFiles.isEmpty()) return
 
-        val defaultName = "Foto2PDF_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
-        val density = resources.displayMetrics.density
-        val pad = (20 * density).toInt()
+        val defaultName = "ArslanPDF_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
+        val pad = dp(20)
 
-        val input = EditText(this).apply {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(8), pad, 0)
+        }
+
+        fun label(text: String) = TextView(this).apply {
+            this.text = text
+            textSize = 13f
+            setPadding(0, dp(12), 0, dp(4))
+        }
+
+        val nameInput = EditText(this).apply {
             setText(defaultName)
             setSelection(text.length)
-        }
-        val container = LinearLayout(this).apply {
-            setPadding(pad, pad / 2, pad, 0)
-            addView(input)
+            setSingleLine(true)
         }
 
-        AlertDialog.Builder(this)
-            .setTitle("PDF adı")
-            .setView(container)
-            .setPositiveButton("Oluştur") { _, _ ->
-                var name = input.text.toString().trim()
-                if (name.isEmpty()) name = defaultName
-                createPdf(sanitizeFileName(name))
-            }
+        val qualityGroup = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val highQuality = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "Yüksek kalite (net, dosya büyük)"
+        }
+        val smallSize = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "Küçük boyut (WhatsApp için ideal)"
+        }
+        qualityGroup.addView(highQuality)
+        qualityGroup.addView(smallSize)
+        qualityGroup.check(highQuality.id)
+
+        val searchableBox = CheckBox(this).apply {
+            text = "Aranabilir PDF (yazılar seçilebilir ve aranabilir)"
+        }
+
+        val passwordBox = CheckBox(this).apply { text = "PDF'e şifre koy" }
+        val passwordInput = EditText(this).apply {
+            hint = "Şifre"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine(true)
+            visibility = View.GONE
+        }
+        passwordBox.setOnCheckedChangeListener { _, checked ->
+            passwordInput.visibility = if (checked) View.VISIBLE else View.GONE
+        }
+
+        layout.addView(label("Dosya adı"))
+        layout.addView(nameInput)
+        layout.addView(label("Kalite"))
+        layout.addView(qualityGroup)
+        layout.addView(label("Seçenekler"))
+        layout.addView(searchableBox)
+        layout.addView(passwordBox)
+        layout.addView(passwordInput)
+
+        val scroll = ScrollView(this).apply { addView(layout) }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("PDF Oluştur")
+            .setView(scroll)
+            .setPositiveButton("Oluştur", null)
             .setNegativeButton("İptal", null)
-            .show()
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val password = passwordInput.text.toString()
+                if (passwordBox.isChecked && password.isEmpty()) {
+                    Toast.makeText(this, "Lütfen bir şifre yaz.", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                var name = nameInput.text.toString().trim()
+                if (name.isEmpty()) name = defaultName
+                val options = DocumentTools.PdfOptions(
+                    highQuality = qualityGroup.checkedRadioButtonId == highQuality.id,
+                    searchable = searchableBox.isChecked,
+                    password = if (passwordBox.isChecked) password else null
+                )
+                dialog.dismiss()
+                createPdf(sanitizeFileName(name), options)
+            }
+        }
+        dialog.show()
     }
 
     private fun sanitizeFileName(name: String): String {
         val cleaned = name.replace(Regex("[^A-Za-z0-9ğüşıöçĞÜŞİÖÇ _-]"), "_")
-        return cleaned.ifBlank { "Foto2PDF" }
+        return cleaned.ifBlank { "ArslanPDF" }
     }
 
-    private fun createPdf(fileNameWithoutExtension: String) {
+    private fun createPdf(fileNameWithoutExtension: String, options: DocumentTools.PdfOptions) {
         if (photoFiles.isEmpty()) return
 
-        val document = PdfDocument()
-        // Her sayfa, o fotoğrafın oranına göre boyutlandırılır; böylece
-        // fotoğraf sayfayı tam kaplar, üstte/altta/yanlarda boşluk kalmaz.
-        // Genişlik A4 genişliğine (595pt) sabitlenir, yükseklik fotoğrafın
-        // oranına göre hesaplanır.
-        val referenceWidth = 595f
-
-        var pageCount = 0
-        for (file in photoFiles) {
-            val bitmap = ImageUtils.loadDownsampledBitmap(file, ImageUtils.MAX_IMAGE_DIMENSION) ?: continue
-
-            val pageWidth = referenceWidth
-            val pageHeight = referenceWidth * (bitmap.height.toFloat() / bitmap.width.toFloat())
-
-            pageCount++
-            val pageInfo = PdfDocument.PageInfo.Builder(
-                pageWidth.toInt().coerceAtLeast(1),
-                pageHeight.toInt().coerceAtLeast(1),
-                pageCount
-            ).create()
-            val page = document.startPage(pageInfo)
-            val canvas: Canvas = page.canvas
-
-            val scale = pageWidth / bitmap.width
-
-            val matrix = android.graphics.Matrix()
-            matrix.postScale(scale, scale)
-            canvas.drawBitmap(bitmap, matrix, null)
-
-            document.finishPage(page)
-            bitmap.recycle()
-        }
-
-        if (pageCount == 0) {
-            document.close()
-            Toast.makeText(this, "PDF oluşturulamadı, fotoğraflar okunamadı.", Toast.LENGTH_LONG).show()
-            return
-        }
-
+        val files = photoFiles.toList()
         val pdfDir = File(getExternalFilesDir(null), "pdfs").apply { mkdirs() }
         var pdfFile = File(pdfDir, "$fileNameWithoutExtension.pdf")
         var counter = 1
@@ -667,23 +900,45 @@ class MainActivity : AppCompatActivity() {
             pdfFile = File(pdfDir, "${fileNameWithoutExtension}_$counter.pdf")
             counter++
         }
+        val target = pdfFile
 
-        try {
-            FileOutputStream(pdfFile).use { out ->
-                document.writeTo(out)
+        val baseMessage = if (options.searchable) "PDF hazırlanıyor, yazılar okunuyor..." else "PDF hazırlanıyor..."
+        val (dialog, label) = showProgress(baseMessage)
+
+        Thread {
+            var pages = 0
+            var error: String? = null
+            try {
+                pages = DocumentTools.buildPdf(applicationContext, files, target, options) { page ->
+                    runOnUiThread { label.text = "$baseMessage ($page/${files.size})" }
+                }
+            } catch (e: Throwable) {
+                error = e.message ?: e.javaClass.simpleName
+                target.delete()
             }
-            document.close()
-            lastPdfFile = pdfFile
-            updatePdfButtons()
-            Toast.makeText(
-                this,
-                "PDF oluşturuldu: ${pdfFile.name}. Şimdi paylaşabilirsin.",
-                Toast.LENGTH_LONG
-            ).show()
-        } catch (e: Exception) {
-            document.close()
-            Toast.makeText(this, "PDF oluşturulamadı: ${e.message}", Toast.LENGTH_LONG).show()
-        }
+            val finalError = error
+            val finalPages = pages
+            runOnUiThread {
+                if (!isAlive()) return@runOnUiThread
+                dialog.dismiss()
+                when {
+                    finalError != null ->
+                        Toast.makeText(this, "PDF oluşturulamadı: $finalError", Toast.LENGTH_LONG).show()
+                    finalPages == 0 ->
+                        Toast.makeText(this, "PDF oluşturulamadı, fotoğraflar okunamadı.", Toast.LENGTH_LONG).show()
+                    else -> {
+                        lastPdfFile = target
+                        updatePdfButtons()
+                        val lock = if (options.password != null) " (şifreli)" else ""
+                        Toast.makeText(
+                            this,
+                            "PDF oluşturuldu$lock: ${target.name}. Şimdi paylaşabilirsin.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }.start()
     }
 
     // ---------- Paylaşma ----------

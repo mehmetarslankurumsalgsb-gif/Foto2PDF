@@ -52,6 +52,19 @@
                 android:orientation="vertical" />
         </LinearLayout>
 
+        <!-- Otomatik belge tarama -->
+        <Button
+            android:id="@+id/scanDocumentButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginBottom="10dp"
+            android:background="@drawable/bg_button_primary"
+            android:text="📑 Belge Tara (Otomatik Kenar Algılama)"
+            android:textAllCaps="false"
+            android:textColor="@color/app_on_primary"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
         <!-- Ana işlem butonları (2x2) -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -88,7 +101,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="20dp">
+            android:layout_marginBottom="10dp">
 
             <Button
                 android:id="@+id/createPdfButton"
@@ -115,6 +128,18 @@
                 android:textColor="@color/app_text_primary"
                 android:textSize="15sp" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/ocrButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="20dp"
+            android:background="@drawable/bg_button_secondary"
+            android:enabled="false"
+            android:text="🔤 Yazıyı Oku (OCR)"
+            android:textAllCaps="false"
+            android:textColor="@color/app_text_primary"
+            android:textSize="15sp" />
 
         <View
             android:layout_width="match_parent"
