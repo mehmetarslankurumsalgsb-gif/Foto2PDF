@@ -1,252 +1,252 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/app_background">
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="20dp">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="ArslanPDF"
-            android:textColor="@color/app_text_primary"
-            android:textSize="28sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:layout_marginBottom="20dp"
-            android:text="Fotoğraflarını saniyeler içinde PDF'e dönüştür"
-            android:textColor="@color/app_text_secondary"
-            android:textSize="14sp" />
-
-        <!-- Fotoğraf listesi kartı -->
+        <!-- Üst başlık -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="@drawable/bg_card"
-            android:padding="16dp"
-            android:layout_marginBottom="16dp">
-
-            <TextView
-                android:id="@+id/statusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Henüz fotoğraf eklenmedi."
-                android:textColor="@color/app_text_primary"
-                android:textSize="15sp"
-                android:layout_marginBottom="12dp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="20dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="18dp"
+            android:paddingBottom="12dp">
 
             <LinearLayout
-                android:id="@+id/thumbnailContainer"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ArslanPDF"
+                    android:textColor="@color/app_text_primary"
+                    android:textSize="26sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Fotoğraflarını saniyeler içinde PDF'e dönüştür"
+                    android:textColor="@color/app_text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/savedPdfsButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/bg_button_secondary"
+                android:gravity="center"
+                android:text="📁"
+                android:textSize="22sp" />
+        </LinearLayout>
+
+        <!-- Fotoğraflar -->
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical" />
-        </LinearLayout>
+                android:orientation="vertical"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="96dp">
 
-        <!-- Otomatik belge tarama -->
-        <Button
-            android:id="@+id/scanDocumentButton"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:layout_marginBottom="10dp"
-            android:background="@drawable/bg_button_primary"
-            android:text="📑 Belge Tara (Otomatik Kenar Algılama)"
-            android:textAllCaps="false"
-            android:textColor="@color/app_on_primary"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/bg_card"
+                    android:padding="16dp"
+                    android:layout_marginBottom="24dp">
 
-        <!-- Ana işlem butonları (2x2) -->
+                    <TextView
+                        android:id="@+id/statusText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Henüz fotoğraf yok."
+                        android:textColor="@color/app_text_primary"
+                        android:textSize="15sp"
+                        android:layout_marginBottom="12dp" />
+
+                    <LinearLayout
+                        android:id="@+id/thumbnailContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="Bu uygulamanın tüm hakları Mehmet ARSLAN'a aittir. İzinsiz olarak kullanılamaz."
+                    android:textColor="@color/app_text_secondary"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center"
+                    android:autoLink="email"
+                    android:text="İletişim için: mehmet201564005@hotmail.com"
+                    android:textColor="@color/app_text_secondary"
+                    android:textColorLink="@color/app_primary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- Alt çubuk -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="10dp">
+            android:gravity="center_vertical"
+            android:background="@color/app_surface"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="14dp">
 
             <Button
-                android:id="@+id/takePhotoButton"
-                android:layout_width="0dp"
+                android:id="@+id/clearButton"
+                android:layout_width="52dp"
                 android:layout_height="52dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="6dp"
-                android:background="@drawable/bg_button_primary"
-                android:text="📷 Fotoğraf Çek"
-                android:textAllCaps="false"
-                android:textColor="@color/app_on_primary"
-                android:textSize="15sp" />
-
-            <Button
-                android:id="@+id/galleryButton"
-                android:layout_width="0dp"
-                android:layout_height="52dp"
-                android:layout_weight="1"
-                android:layout_marginStart="6dp"
-                android:background="@drawable/bg_button_secondary"
-                android:text="🖼 Galeri"
-                android:textAllCaps="false"
-                android:textColor="@color/app_text_primary"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="10dp">
+                android:layout_marginEnd="10dp"
+                android:background="@drawable/bg_button_outline"
+                app:backgroundTint="@null"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:padding="0dp"
+                android:text="🗑"
+                android:textSize="18sp" />
 
             <Button
                 android:id="@+id/createPdfButton"
                 android:layout_width="0dp"
                 android:layout_height="52dp"
                 android:layout_weight="1"
-                android:layout_marginEnd="6dp"
+                android:layout_marginEnd="10dp"
                 android:background="@drawable/bg_button_primary"
-                android:enabled="false"
+                app:backgroundTint="@null"
                 android:text="📄 PDF Oluştur"
                 android:textAllCaps="false"
                 android:textColor="@color/app_on_primary"
-                android:textSize="15sp" />
+                android:textSize="15sp"
+                android:textStyle="bold" />
 
             <Button
-                android:id="@+id/clearButton"
-                android:layout_width="0dp"
+                android:id="@+id/ocrButton"
+                android:layout_width="wrap_content"
                 android:layout_height="52dp"
-                android:layout_weight="1"
-                android:layout_marginStart="6dp"
-                android:background="@drawable/bg_button_outline"
-                android:text="🗑 Temizle"
+                android:background="@drawable/bg_button_secondary"
+                app:backgroundTint="@null"
+                android:minWidth="0dp"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:text="🔤 OCR"
                 android:textAllCaps="false"
                 android:textColor="@color/app_text_primary"
                 android:textSize="15sp" />
         </LinearLayout>
+    </LinearLayout>
+
+    <!-- + menüsü açıkken arkayı karartan katman -->
+    <View
+        android:id="@+id/fabOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#B3000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <!-- + menüsü -->
+    <LinearLayout
+        android:id="@+id/fabMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="20dp"
+        android:layout_marginBottom="170dp"
+        android:gravity="end"
+        android:orientation="vertical"
+        android:visibility="gone">
 
         <Button
-            android:id="@+id/ocrButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginBottom="20dp"
-            android:background="@drawable/bg_button_secondary"
-            android:enabled="false"
-            android:text="🔤 Yazıyı Oku (OCR)"
-            android:textAllCaps="false"
-            android:textColor="@color/app_text_primary"
-            android:textSize="15sp" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/app_divider"
-            android:layout_marginBottom="16dp" />
-
-        <TextView
+            android:id="@+id/scanDocumentButton"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="PDF'i Paylaş"
-            android:textColor="@color/app_text_secondary"
-            android:textSize="13sp"
-            android:layout_marginBottom="10dp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="10dp">
-
-            <Button
-                android:id="@+id/whatsappButton"
-                android:layout_width="0dp"
-                android:layout_height="52dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="6dp"
-                android:background="@drawable/bg_whatsapp"
-                android:enabled="false"
-                android:text="WhatsApp"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp" />
-
-            <Button
-                android:id="@+id/telegramButton"
-                android:layout_width="0dp"
-                android:layout_height="52dp"
-                android:layout_weight="1"
-                android:layout_marginStart="6dp"
-                android:background="@drawable/bg_telegram"
-                android:enabled="false"
-                android:text="Telegram"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <Button
-            android:id="@+id/shareButton"
-            android:layout_width="match_parent"
             android:layout_height="52dp"
             android:layout_marginBottom="10dp"
-            android:background="@drawable/bg_button_outline"
-            android:enabled="false"
-            android:text="Diğer Uygulamayla Paylaş"
+            android:background="@drawable/bg_button_primary"
+            app:backgroundTint="@null"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:text="📑 Belge Tara"
             android:textAllCaps="false"
-            android:textColor="@color/app_text_primary"
-            android:textSize="15sp" />
+            android:textColor="@color/app_on_primary"
+            android:textSize="15sp"
+            android:textStyle="bold" />
 
         <Button
-            android:id="@+id/saveToDeviceButton"
-            android:layout_width="match_parent"
+            android:id="@+id/takePhotoButton"
+            android:layout_width="wrap_content"
             android:layout_height="52dp"
-            android:layout_marginBottom="20dp"
-            android:background="@drawable/bg_button_outline"
-            android:enabled="false"
-            android:text="📥 Telefona Kaydet"
-            android:textAllCaps="false"
-            android:textColor="@color/app_text_primary"
-            android:textSize="15sp" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/app_divider"
-            android:layout_marginBottom="16dp" />
-
-        <Button
-            android:id="@+id/savedPdfsButton"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginBottom="24dp"
+            android:layout_marginBottom="10dp"
             android:background="@drawable/bg_button_secondary"
-            android:text="📁 Kaydedilenler"
+            app:backgroundTint="@null"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:text="📷 Fotoğraf Çek"
             android:textAllCaps="false"
             android:textColor="@color/app_text_primary"
             android:textSize="15sp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:text="Bu uygulamanın tüm hakları Mehmet ARSLAN'a aittir. İzinsiz olarak kullanılamaz."
-            android:textColor="@color/app_text_secondary"
-            android:textSize="11sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:gravity="center"
-            android:autoLink="email"
-            android:text="İletişim için: mehmet201564005@hotmail.com"
-            android:textColor="@color/app_text_secondary"
-            android:textColorLink="@color/app_primary"
-            android:textSize="11sp" />
-
+        <Button
+            android:id="@+id/galleryButton"
+            android:layout_width="wrap_content"
+            android:layout_height="52dp"
+            android:background="@drawable/bg_button_secondary"
+            app:backgroundTint="@null"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:text="🖼 Galeriden Seç"
+            android:textAllCaps="false"
+            android:textColor="@color/app_text_primary"
+            android:textSize="15sp" />
     </LinearLayout>
-</ScrollView>
+
+    <!-- Yüzen + butonu -->
+    <TextView
+        android:id="@+id/fabButton"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="20dp"
+        android:layout_marginBottom="98dp"
+        android:background="@drawable/bg_icon_button"
+        android:backgroundTint="@color/app_primary"
+        android:elevation="8dp"
+        android:gravity="center"
+        android:text="+"
+        android:textColor="@color/app_on_primary"
+        android:textSize="32sp" />
+
+</FrameLayout>

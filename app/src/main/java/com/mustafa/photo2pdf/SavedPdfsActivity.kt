@@ -12,16 +12,13 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 
 /**
- * Daha önce oluşturulmuş tüm PDF'lerin listelendiği ekran. Varsayılan
- * olarak en yeni tarihe göre sıralanır; "Tarihe Göre" / "İsme Göre"
- * butonuna basarak sıralama değiştirilebilir. Her satıra dokununca
- * paylaşma veya silme seçenekleri açılır.
+ * Telefonun İndirilenler/ArslanPDF klasöründeki PDF'lerin listesi.
+ * Dosya yöneticisinden silinen PDF burada da görünmez.
+ * Varsayılan sıralama en yeni tarih; butonla isme göre sıralanabilir.
  */
 class SavedPdfsActivity : AppCompatActivity() {
 
@@ -47,8 +44,6 @@ class SavedPdfsActivity : AppCompatActivity() {
             sortButton.text = if (sortMode == SortMode.DATE) "Tarihe Göre" else "İsme Göre"
             refreshList()
         }
-
-        refreshList()
     }
 
     override fun onResume() {
@@ -56,35 +51,31 @@ class SavedPdfsActivity : AppCompatActivity() {
         refreshList()
     }
 
-    private fun pdfDir(): File = File(getExternalFilesDir(null), "pdfs")
-
     private fun refreshList() {
         listContainer.removeAllViews()
 
-        val files = pdfDir().listFiles { file -> file.isFile && file.name.endsWith(".pdf") }?.toMutableList()
-            ?: mutableListOf()
-
-        if (files.isEmpty()) {
+        val items = PdfStore.list(this).toMutableList()
+        if (items.isEmpty()) {
             emptyText.visibility = View.VISIBLE
             return
         }
         emptyText.visibility = View.GONE
 
         when (sortMode) {
-            SortMode.DATE -> files.sortByDescending { it.lastModified() }
-            SortMode.NAME -> files.sortBy { it.name.lowercase(Locale.getDefault()) }
+            SortMode.DATE -> items.sortByDescending { it.modifiedMillis }
+            SortMode.NAME -> items.sortBy { it.name.lowercase(Locale("tr")) }
         }
 
         val density = resources.displayMetrics.density
-        for (file in files) {
-            listContainer.addView(buildRow(file), LinearLayout.LayoutParams(
+        for (item in items) {
+            listContainer.addView(buildRow(item), LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = (10 * density).toInt() })
         }
     }
 
-    private fun buildRow(file: File): View {
+    private fun buildRow(item: PdfStore.Item): View {
         val density = resources.displayMetrics.density
 
         val row = LinearLayout(this).apply {
@@ -93,7 +84,7 @@ class SavedPdfsActivity : AppCompatActivity() {
             background = ContextCompat.getDrawable(this@SavedPdfsActivity, R.drawable.bg_thumbnail_card)
             val pad = (12 * density).toInt()
             setPadding(pad, pad, pad, pad)
-            setOnClickListener { showItemMenu(file) }
+            setOnClickListener { showItemMenu(item) }
         }
 
         val icon = TextView(this).apply {
@@ -112,7 +103,7 @@ class SavedPdfsActivity : AppCompatActivity() {
         }
 
         val nameText = TextView(this).apply {
-            text = file.nameWithoutExtension
+            text = item.name.removeSuffix(".pdf")
             setTextColor(ContextCompat.getColor(this@SavedPdfsActivity, R.color.app_text_primary))
             textSize = 14f
             maxLines = 1
@@ -121,7 +112,7 @@ class SavedPdfsActivity : AppCompatActivity() {
 
         val dateFormat = SimpleDateFormat("d MMMM yyyy, HH:mm", Locale("tr"))
         val dateText = TextView(this).apply {
-            text = dateFormat.format(file.lastModified())
+            text = dateFormat.format(item.modifiedMillis)
             setTextColor(ContextCompat.getColor(this@SavedPdfsActivity, R.color.app_text_secondary))
             textSize = 12f
         }
@@ -134,55 +125,68 @@ class SavedPdfsActivity : AppCompatActivity() {
             textSize = 20f
             setTextColor(ContextCompat.getColor(this@SavedPdfsActivity, R.color.app_text_primary))
             setPadding((10 * density).toInt(), 0, (10 * density).toInt(), 0)
-            setOnClickListener { showItemMenu(file) }
+            setOnClickListener { showItemMenu(item) }
         }
         row.addView(menuBtn)
 
         return row
     }
 
-    private fun showItemMenu(file: File) {
-        val options = arrayOf("Paylaş", "WhatsApp", "Telegram", "Sil")
+    private fun showItemMenu(item: PdfStore.Item) {
+        val options = arrayOf("Aç", "Paylaş", "WhatsApp", "Telegram", "Sil")
         AlertDialog.Builder(this)
-            .setTitle(file.nameWithoutExtension)
+            .setTitle(item.name.removeSuffix(".pdf"))
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> shareGeneric(file)
-                    1 -> shareToPackage(file, "com.whatsapp", "WhatsApp")
-                    2 -> shareToPackage(file, "org.telegram.messenger", "Telegram")
-                    3 -> confirmDelete(file)
+                    0 -> openPdf(item)
+                    1 -> shareGeneric(item)
+                    2 -> shareToPackage(item, "com.whatsapp", "WhatsApp")
+                    3 -> shareToPackage(item, "org.telegram.messenger", "Telegram")
+                    4 -> confirmDelete(item)
                 }
             }
             .show()
     }
 
-    private fun confirmDelete(file: File) {
+    private fun openPdf(item: PdfStore.Item) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(item.uri, "application/pdf")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Telefonda PDF açabilecek bir uygulama yok.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun confirmDelete(item: PdfStore.Item) {
         AlertDialog.Builder(this)
             .setTitle("Silinsin mi?")
-            .setMessage("${file.nameWithoutExtension} kalıcı olarak silinecek.")
+            .setMessage("${item.name.removeSuffix(".pdf")} telefondan kalıcı olarak silinecek.")
             .setPositiveButton("Sil") { _, _ ->
-                file.delete()
+                if (!PdfStore.delete(this, item)) {
+                    Toast.makeText(this, "Silinemedi.", Toast.LENGTH_SHORT).show()
+                }
                 refreshList()
             }
             .setNegativeButton("Vazgeç", null)
             .show()
     }
 
-    private fun shareGeneric(file: File) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+    private fun shareGeneric(item: PdfStore.Item) {
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, item.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(shareIntent, "PDF'i paylaş"))
     }
 
-    private fun shareToPackage(file: File, packageNameTarget: String, displayName: String) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+    private fun shareToPackage(item: PdfStore.Item, packageNameTarget: String, displayName: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, item.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             setPackage(packageNameTarget)
         }

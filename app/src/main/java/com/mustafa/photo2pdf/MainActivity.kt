@@ -38,6 +38,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
@@ -52,7 +53,6 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     private val photoFiles = mutableListOf<File>()
-    private var lastPdfFile: File? = null
 
     private var pendingCropSourceFile: File? = null
     private var pendingCropDestFile: File? = null
@@ -62,10 +62,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var thumbnailContainer: LinearLayout
     private lateinit var createPdfButton: Button
     private lateinit var ocrButton: Button
-    private lateinit var whatsappButton: Button
-    private lateinit var telegramButton: Button
-    private lateinit var shareButton: Button
-    private lateinit var saveToDeviceButton: Button
+    private lateinit var fabButton: TextView
+    private lateinit var fabMenu: LinearLayout
+    private lateinit var fabOverlay: View
+    private var fabOpen = false
 
     private val captureActivityLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -146,20 +146,25 @@ class MainActivity : AppCompatActivity() {
         thumbnailContainer = findViewById(R.id.thumbnailContainer)
         createPdfButton = findViewById(R.id.createPdfButton)
         ocrButton = findViewById(R.id.ocrButton)
-        whatsappButton = findViewById(R.id.whatsappButton)
-        telegramButton = findViewById(R.id.telegramButton)
-        shareButton = findViewById(R.id.shareButton)
-        saveToDeviceButton = findViewById(R.id.saveToDeviceButton)
+        fabButton = findViewById(R.id.fabButton)
+        fabMenu = findViewById(R.id.fabMenu)
+        fabOverlay = findViewById(R.id.fabOverlay)
+
+        fabButton.setOnClickListener { setFabMenuOpen(!fabOpen) }
+        fabOverlay.setOnClickListener { setFabMenuOpen(false) }
 
         findViewById<Button>(R.id.scanDocumentButton).setOnClickListener {
+            setFabMenuOpen(false)
             startDocumentScan()
         }
 
         findViewById<Button>(R.id.takePhotoButton).setOnClickListener {
+            setFabMenuOpen(false)
             checkPermissionAndOpenCapture()
         }
 
         findViewById<Button>(R.id.galleryButton).setOnClickListener {
+            setFabMenuOpen(false)
             pickImagesLauncher.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
             )
@@ -168,26 +173,60 @@ class MainActivity : AppCompatActivity() {
         createPdfButton.setOnClickListener { showPdfOptionsDialog() }
         ocrButton.setOnClickListener { startOcr() }
 
-        whatsappButton.setOnClickListener { shareToPackage("com.whatsapp", "WhatsApp") }
-        telegramButton.setOnClickListener { shareToPackage("org.telegram.messenger", "Telegram") }
-        shareButton.setOnClickListener { shareGeneric() }
-        saveToDeviceButton.setOnClickListener { withStoragePermission { saveToDevice() } }
-
-        findViewById<Button>(R.id.savedPdfsButton).setOnClickListener {
+        findViewById<TextView>(R.id.savedPdfsButton).setOnClickListener {
             startActivity(Intent(this, SavedPdfsActivity::class.java))
         }
 
-        findViewById<Button>(R.id.clearButton).setOnClickListener {
-            photoFiles.forEach { it.delete() }
-            photoFiles.clear()
-            lastPdfFile = null
-            refreshThumbnails()
-            updatePdfButtons()
-            updateStatus()
-        }
+        findViewById<Button>(R.id.clearButton).setOnClickListener { confirmClear() }
 
-        updatePdfButtons()
         updateStatus()
+
+        // Eski sürümde uygulama içine kaydedilen PDF'leri İndirilenler/ArslanPDF'e taşı.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Thread { PdfStore.migrateOldFiles(applicationContext) }.start()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (fabOpen) {
+            setFabMenuOpen(false)
+        } else {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+        }
+    }
+
+    // ---------- Yüzen + butonu ve menüsü ----------
+
+    private fun setFabMenuOpen(open: Boolean) {
+        fabOpen = open
+        fabMenu.visibility = if (open) View.VISIBLE else View.GONE
+        fabOverlay.visibility = if (open) View.VISIBLE else View.GONE
+        fabButton.animate().rotation(if (open) 45f else 0f).setDuration(180).start()
+        if (open) {
+            fabMenu.alpha = 0f
+            fabMenu.translationY = dp(24).toFloat()
+            fabMenu.animate().alpha(1f).translationY(0f).setDuration(180).start()
+        }
+    }
+
+    private fun confirmClear() {
+        if (photoFiles.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("Fotoğraflar temizlensin mi?")
+            .setMessage("Eklenen ${photoFiles.size} fotoğraf listeden kaldırılacak. Kaydedilmiş PDF'ler silinmez.")
+            .setPositiveButton("Temizle") { _, _ ->
+                photoFiles.forEach { it.delete() }
+                photoFiles.clear()
+                refreshThumbnails()
+                updateStatus()
+            }
+            .setNegativeButton("Vazgeç", null)
+            .show()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -647,28 +686,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateStatus() {
         statusText.text = if (photoFiles.isEmpty()) {
-            "Henüz fotoğraf eklenmedi."
+            "Henüz fotoğraf yok.\nBaşlamak için sağ alttaki + butonuna dokun."
         } else {
-            "${photoFiles.size} fotoğraf hazır."
+            "${photoFiles.size} fotoğraf hazır. Sırayı değiştirmek için fotoğrafa basılı tutup sürükle."
         }
         val hasPhotos = photoFiles.isNotEmpty()
         createPdfButton.isEnabled = hasPhotos
         createPdfButton.alpha = if (hasPhotos) 1f else 0.4f
         ocrButton.isEnabled = hasPhotos
         ocrButton.alpha = if (hasPhotos) 1f else 0.4f
-    }
-
-    private fun updatePdfButtons() {
-        val hasPdf = lastPdfFile != null
-        val alpha = if (hasPdf) 1f else 0.4f
-        whatsappButton.isEnabled = hasPdf
-        telegramButton.isEnabled = hasPdf
-        shareButton.isEnabled = hasPdf
-        saveToDeviceButton.isEnabled = hasPdf
-        whatsappButton.alpha = alpha
-        telegramButton.alpha = alpha
-        shareButton.alpha = alpha
-        saveToDeviceButton.alpha = alpha
     }
 
     // ---------- OCR: yazıyı okuma ----------
@@ -732,16 +758,18 @@ class MainActivity : AppCompatActivity() {
         val stamp = SimpleDateFormat("dd.MM.yyyy HH.mm.ss", Locale("tr")).format(Date())
         val fileName = "Okunan Yazı $stamp.txt"
         try {
-            writeToDownloads(fileName, "text/plain") { out ->
-                out.write(text.toByteArray(Charsets.UTF_8))
-            }
-            Toast.makeText(this, "\"$fileName\" İndirilenler klasörüne kaydedildi.", Toast.LENGTH_LONG).show()
+            writeTextFile(fileName, text)
+            Toast.makeText(
+                this,
+                "\"$fileName\" İndirilenler › ${PdfStore.FOLDER} klasörüne kaydedildi.",
+                Toast.LENGTH_LONG
+            ).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
-    // ---------- Telefona kaydetme (İndirilenler klasörü) ----------
+    // ---------- Depolama izni (sadece Android 9 ve altı) ----------
 
     private fun withStoragePermission(action: () -> Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
@@ -756,39 +784,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun writeToDownloads(fileName: String, mimeType: String, writer: (OutputStream) -> Unit) {
+    /** Metin dosyasını İndirilenler/ArslanPDF klasörüne yazar. */
+    private fun writeTextFile(fileName: String, text: String) {
+        val bytes = text.toByteArray(Charsets.UTF_8)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/" + PdfStore.FOLDER + "/"
+                )
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IllegalStateException("Dosya oluşturulamadı")
-            val out = contentResolver.openOutputStream(uri)
+            val out: OutputStream = contentResolver.openOutputStream(uri)
                 ?: throw IllegalStateException("Dosya açılamadı")
-            out.use { writer(it) }
+            out.use { it.write(bytes) }
         } else {
             @Suppress("DEPRECATION")
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            downloadsDir.mkdirs()
-            FileOutputStream(File(downloadsDir, fileName)).use { writer(it) }
-        }
-    }
-
-    private fun saveToDevice() {
-        val file = lastPdfFile
-        if (file == null || !file.exists()) {
-            Toast.makeText(this, "Önce PDF oluşturman gerekiyor.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        try {
-            writeToDownloads(file.name, "application/pdf") { out ->
-                file.inputStream().use { input -> input.copyTo(out) }
-            }
-            Toast.makeText(this, "PDF, telefonunun İndirilenler klasörüne kaydedildi.", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Kaydedilemedi: ${e.message}", Toast.LENGTH_LONG).show()
+            val dir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                PdfStore.FOLDER
+            )
+            dir.mkdirs()
+            FileOutputStream(File(dir, fileName)).use { it.write(bytes) }
         }
     }
 
@@ -797,7 +817,7 @@ class MainActivity : AppCompatActivity() {
     private fun showPdfOptionsDialog() {
         if (photoFiles.isEmpty()) return
 
-        val defaultName = "ArslanPDF_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
+        val defaultName = "ArslanPDF " + SimpleDateFormat("dd.MM.yyyy HH.mm", Locale("tr")).format(Date())
         val pad = dp(20)
 
         val layout = LinearLayout(this).apply {
@@ -878,14 +898,15 @@ class MainActivity : AppCompatActivity() {
                     password = if (passwordBox.isChecked) password else null
                 )
                 dialog.dismiss()
-                createPdf(sanitizeFileName(name), options)
+                val fileName = sanitizeFileName(name)
+                withStoragePermission { createPdf(fileName, options) }
             }
         }
         dialog.show()
     }
 
     private fun sanitizeFileName(name: String): String {
-        val cleaned = name.replace(Regex("[^A-Za-z0-9ğüşıöçĞÜŞİÖÇ _-]"), "_")
+        val cleaned = name.replace(Regex("[^A-Za-z0-9ğüşıöçĞÜŞİÖÇ ._-]"), "_").trim('.', ' ')
         return cleaned.ifBlank { "ArslanPDF" }
     }
 
@@ -893,29 +914,28 @@ class MainActivity : AppCompatActivity() {
         if (photoFiles.isEmpty()) return
 
         val files = photoFiles.toList()
-        val pdfDir = File(getExternalFilesDir(null), "pdfs").apply { mkdirs() }
-        var pdfFile = File(pdfDir, "$fileNameWithoutExtension.pdf")
-        var counter = 1
-        while (pdfFile.exists()) {
-            pdfFile = File(pdfDir, "${fileNameWithoutExtension}_$counter.pdf")
-            counter++
-        }
-        val target = pdfFile
+        val tempFile = File(cacheDir, "hazirlanan.pdf")
 
         val baseMessage = if (options.searchable) "PDF hazırlanıyor, yazılar okunuyor..." else "PDF hazırlanıyor..."
         val (dialog, label) = showProgress(baseMessage)
 
         Thread {
+            var item: PdfStore.Item? = null
             var pages = 0
             var error: String? = null
             try {
-                pages = DocumentTools.buildPdf(applicationContext, files, target, options) { page ->
+                pages = DocumentTools.buildPdf(applicationContext, files, tempFile, options) { page ->
                     runOnUiThread { label.text = "$baseMessage ($page/${files.size})" }
+                }
+                if (pages > 0) {
+                    item = PdfStore.save(applicationContext, tempFile, "$fileNameWithoutExtension.pdf")
                 }
             } catch (e: Throwable) {
                 error = e.message ?: e.javaClass.simpleName
-                target.delete()
+            } finally {
+                tempFile.delete()
             }
+            val finalItem = item
             val finalError = error
             val finalPages = pages
             runOnUiThread {
@@ -924,37 +944,108 @@ class MainActivity : AppCompatActivity() {
                 when {
                     finalError != null ->
                         Toast.makeText(this, "PDF oluşturulamadı: $finalError", Toast.LENGTH_LONG).show()
-                    finalPages == 0 ->
+                    finalPages == 0 || finalItem == null ->
                         Toast.makeText(this, "PDF oluşturulamadı, fotoğraflar okunamadı.", Toast.LENGTH_LONG).show()
-                    else -> {
-                        lastPdfFile = target
-                        updatePdfButtons()
-                        val lock = if (options.password != null) " (şifreli)" else ""
-                        Toast.makeText(
-                            this,
-                            "PDF oluşturuldu$lock: ${target.name}. Şimdi paylaşabilirsin.",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
+                    else -> showPdfReadySheet(finalItem, options.password != null)
                 }
             }
         }.start()
     }
 
-    // ---------- Paylaşma ----------
+    // ---------- PDF hazır: paylaşma penceresi ----------
 
-    private fun shareToPackage(packageName: String, displayName: String) {
-        val file = lastPdfFile
-        if (file == null || !file.exists()) {
-            Toast.makeText(this, "Önce PDF oluşturman gerekiyor.", Toast.LENGTH_SHORT).show()
-            return
+    private fun showPdfReadySheet(item: PdfStore.Item, locked: Boolean) {
+        val sheet = BottomSheetDialog(this)
+        val pad = dp(20)
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, dp(28))
+            setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.app_surface))
         }
-        val uri = FileProvider.getUriForFile(this, "${this.packageName}.fileprovider", file)
+
+        val title = TextView(this).apply {
+            text = (if (locked) "🔒 " else "✅ ") + "PDF hazır"
+            textSize = 19f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.app_text_primary))
+        }
+        val subtitle = TextView(this).apply {
+            text = "${item.name}\nİndirilenler › ${PdfStore.FOLDER} klasörüne kaydedildi."
+            textSize = 13f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.app_text_secondary))
+            setPadding(0, dp(4), 0, dp(16))
+        }
+        layout.addView(title)
+        layout.addView(subtitle)
+
+        fun sheetButton(text: String, background: Int, textColor: Int, onClick: () -> Unit) =
+            Button(this).apply {
+                this.text = text
+                setAllCaps(false)
+                textSize = 15f
+                setTextColor(ContextCompat.getColor(this@MainActivity, textColor))
+                this.background = ContextCompat.getDrawable(this@MainActivity, background)
+                setOnClickListener {
+                    sheet.dismiss()
+                    onClick()
+                }
+            }
+
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row.addView(
+            sheetButton("WhatsApp", R.drawable.bg_whatsapp, android.R.color.white) {
+                shareToPackage(item, "com.whatsapp", "WhatsApp")
+            },
+            LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) }
+        )
+        row.addView(
+            sheetButton("Telegram", R.drawable.bg_telegram, android.R.color.white) {
+                shareToPackage(item, "org.telegram.messenger", "Telegram")
+            },
+            LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) }
+        )
+        layout.addView(row)
+
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row2.addView(
+            sheetButton("📖 Aç", R.drawable.bg_button_secondary, R.color.app_text_primary) {
+                openPdf(item)
+            },
+            LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6); topMargin = dp(12) }
+        )
+        row2.addView(
+            sheetButton("↗ Diğer", R.drawable.bg_button_secondary, R.color.app_text_primary) {
+                shareGeneric(item)
+            },
+            LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6); topMargin = dp(12) }
+        )
+        layout.addView(row2)
+
+        sheet.setContentView(layout)
+        sheet.show()
+    }
+
+    // ---------- Açma ve paylaşma ----------
+
+    private fun openPdf(item: PdfStore.Item) {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(item.uri, "application/pdf")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Telefonda PDF açabilecek bir uygulama yok.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun shareToPackage(item: PdfStore.Item, targetPackage: String, displayName: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, item.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            setPackage(packageName)
+            setPackage(targetPackage)
         }
         try {
             startActivity(intent)
@@ -963,16 +1054,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun shareGeneric() {
-        val file = lastPdfFile
-        if (file == null || !file.exists()) {
-            Toast.makeText(this, "Önce PDF oluşturman gerekiyor.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+    private fun shareGeneric(item: PdfStore.Item) {
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, item.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(shareIntent, "PDF'i paylaş"))
